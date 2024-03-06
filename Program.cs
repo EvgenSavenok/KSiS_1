@@ -1,7 +1,4 @@
-﻿using System;
-using System.Diagnostics;
-using System.Net;
-using System.Linq;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -15,9 +12,7 @@ class NetworkScanner
         startAddress = new string[ipAddressParts.Length];
         finalAddress = new string[ipAddressParts.Length];
         for (int i = 0; i < ipAddressParts.Length; i++)
-        {
             startAddress[i] = (byte.Parse(ipAddressParts[i]) & byte.Parse(subnetMaskParts[i])).ToString();
-        }
         for (int i = 0; i < finalAddress.Length; i++)
         {
             string maskBinaryRepresentation = Convert.ToString(byte.Parse(subnetMaskParts[i]), 2).PadLeft(8, '0');
@@ -26,9 +21,7 @@ class NetworkScanner
             string startAddressBinaryRepresentation = Convert.ToString(byte.Parse(startAddress[i]), 2).PadLeft(8, '0');
             char[] result = new char[maskBinaryRepresentationStr.Length];
             for (int j = 0; j < maskBinaryRepresentationStr.Length; j++)
-            {
                 result[j] = ((maskBinaryRepresentationStr[j] == '1' || startAddressBinaryRepresentation[j] == '1') ? '1' : '0');
-            }
             finalAddress[i] = new string(result);
             finalAddress[i] = Convert.ToInt32(finalAddress[i], 2).ToString();
         }
@@ -48,41 +41,23 @@ class NetworkScanner
             }
         }
     }
-    /*static string[] GetInfo(string ipAddress)
-    {
-        Process arpProcess = new Process();
-        arpProcess.StartInfo.FileName = "arp";
-        arpProcess.StartInfo.Arguments = "-a " + ipAddress;
-        arpProcess.StartInfo.RedirectStandardOutput = true;
-        arpProcess.Start();
-        string output = arpProcess.StandardOutput.ReadToEnd();
-        arpProcess.WaitForExit();
-        string[] lines = output.Split(Environment.NewLine);
-        if (lines.Length >= 3)
-        {
-            string[] tokens = lines[2].Split(' ');
-            if (tokens.Length >= 3)
-                return tokens;
-        }
-        return null;
-    }*/
     static class NativeMethods
     {
         [DllImport("iphlpapi.dll", ExactSpelling = true)]
         public static extern int SendARP(int destIP, int srcIP, byte[] pMacAddr, ref uint phyAddrLen);
     }
-    private static string GetName(string ipAddress)
+    private static string? GetName(string ipAddress)
     {
         IPHostEntry hostEntry;
         try
         {
             hostEntry = Dns.GetHostEntry(ipAddress);
         }
-        catch
+        catch (SocketException)
         {
-            return null;
+            return "Unknown";
         }
-        return hostEntry.HostName;
+        return (hostEntry.HostName == null) ? "Unknown" : hostEntry.HostName;
     }
     static string? GetMac(string ipAddress)
     {
@@ -98,28 +73,44 @@ class NetworkScanner
             return null;
         }
     }
-    static Dictionary<string, string> PingAndGetMacAddresses(string[] startIp, string[] endIp)
+    public static void CalculateThread(string ip)
     {
-        Dictionary<string, string> macAddresses = new Dictionary<string, string>();
+        string mac = "";
+        Thread macThread = new Thread(() =>
+        {
+            mac = GetMac(ip);
+        });
+        macThread.Start();
+        string name = GetName(ip);
+        if (mac != null && !mac.Equals("00:00:00:00:00:00"))
+        {
+            Console.Write($"IP: {ip},");
+            Console.Write($" MAC: {mac},");
+            Console.WriteLine($" Device: {name}");
+        }
+    }
+    static void PingAndGetMacAddresses(string[] startIp, string[] endIp)
+    {
+        List<Task> tasks = new List<Task>();
         int startRange = int.Parse(startIp[3]);
         int endRange = int.Parse(endIp[3]);
-        for (int i = startRange; i <= endRange; i++)
+        int rangeSize = (endRange - startRange + 1) / 50;
+        for (int j = 0; j < 50; j++)
         {
-            string ip = $"{startIp[0]}.{startIp[1]}.{startIp[2]}.{i}";
-            Console.WriteLine(".");
-            if (PingHost(ip))
+            int rangeStart = startRange + j * rangeSize;
+            int rangeEnd = j == 99 ? endRange : rangeStart + rangeSize - 1; 
+            Task task = Task.Run(() =>
             {
-                string mac = GetMac(ip);
-                string name = GetName(ip);
-                if (mac != null && name != null)
+                for (int i = rangeStart; i <= rangeEnd; i++)
                 {
-                    macAddresses[mac] = mac;
-                    macAddresses[ip] = ip;
-                    Console.WriteLine($"IP: {macAddresses[ip]}, MAC: {macAddresses[mac]}, Device: {name}");
+                    string ip = $"{startIp[0]}.{startIp[1]}.{startIp[2]}.{i}";
+                    //if (PingHost(ip))
+                        CalculateThread(ip);
                 }
-            }
+            });
+            tasks.Add(task);
         }
-        return macAddresses;
+        Task.WaitAll(tasks.ToArray());
     }
     static void ScanLocalNetwork()
     {
@@ -136,7 +127,7 @@ class NetworkScanner
                         string[] startAddress;
                         string[] finalAddress;
                         GetNetworkAddresses(ipAddress.Address.ToString(), ipAddress.IPv4Mask.ToString(), out startAddress, out finalAddress);
-                        Dictionary<string, string> macAddresses = PingAndGetMacAddresses(startAddress, finalAddress);
+                        PingAndGetMacAddresses(startAddress, finalAddress);
                     }
                 }
             }
